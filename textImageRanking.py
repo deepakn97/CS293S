@@ -119,6 +119,8 @@ class TextImageRanker:
 def main():
     text_image_ranker = TextImageRanker()
 
+    # TODO: Look at the textRanking.py file and implement the reranking 
+
 
 if __name__ == '__main__':
     main()
