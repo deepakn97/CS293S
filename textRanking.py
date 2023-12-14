@@ -8,14 +8,15 @@ import torch
 import torch.nn.functional as F
 from transformers import AutoTokenizer, AutoModel
 
-class TextRanking:
+from evaluate import evaluate_rankings
+
+class TextRanker:
     def __init__(self, previous_ranking: List[Dict[str, Any]]):
         print("Loading model ...")
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.tokenizer = AutoTokenizer.from_pretrained('intfloat/multilingual-e5-large')
-        self.model = AutoModel.from_pretrained('intfloat/multilingual-e5-large')
-
+        self.model = AutoModel.from_pretrained('intfloat/multilingual-e5-large').to(self.device)
         self.previous_ranking = previous_ranking
-
 
     def average_pool(self,
                      last_hidden_states: torch.Tensor,
@@ -32,7 +33,7 @@ class TextRanking:
         return last_hidden.sum(dim=1) / attention_mask.sum(dim=1)[..., None]
 
     
-    def get_scores(self, query: List[str], documents: Dict[str, List[str]], ranking_dict: Dict[str, List[str]]) -> torch.Tensor:
+    def get_scores(self, query: List[str], documents: Dict[str, List[str]], ranking_dict: Dict[str, List[str]]) -> Dict[str, float]:
         """
         Get the scores for the documents given the query
 
@@ -51,7 +52,7 @@ class TextRanking:
             input_text.append("passage: " + documents[doc_id]['text'])
 
         # Tokenize the input
-        tokenized_input = self.tokenizer(input_text, padding=True, truncation=True, return_tensors="pt")
+        tokenized_input = self.tokenizer(input_text, padding=True, truncation=True, return_tensors="pt").to(self.device)
 
         # Get the last hidden states for the query and documents
         outputs = self.model(**tokenized_input)
@@ -60,11 +61,12 @@ class TextRanking:
         # Get the query and document embeddings
         embeddings = F.normalize(embeddings, p=2, dim=1)
         scores = (embeddings[0] @ embeddings[1:].T) * 100
+        scores = {doc_id: score.item() for doc_id, score in zip(ranking_dict[query['query_id']], scores)}
 
-        return scores.tolist()
+        return scores
     
 
-    def get_rankings(self, queries: List[Dict[str, Any]],  documents: Dict[str, List[str]], ranking_dict: Dict[str, List[str]]) -> List[List[str]]:
+    def get_rankings(self, queries: List[Dict[str, Any]],  documents: Dict[str, List[str]], ranking_dict: Dict[str, List[str]]) -> Tuple[Dict[str, List[float]], Dict[str, List[str]]]:
         """
         Get the rankings for the queries
 
@@ -73,17 +75,22 @@ class TextRanking:
 
         :return List[str]: IDs of the top N documents for each query
         """
-
         # Get the scores for the documents
-        scores = [self.get_scores(query, documents, ranking_dict) for query in queries]
+        from tqdm import tqdm
+        scores = {}
+        for query in tqdm(queries):
+            scores[query['query_id']] = self.get_scores(query, documents, ranking_dict)
+            # Save scores after each step
+            with open('text_scores.json', 'w') as f:
+                json.dump(scores, f)
 
-        # Rerank the documents
-        rankings = []
-        for query, score in zip(queries, scores):
-            ranking = [doc_id for _, doc_id in sorted(zip(score, ranking_dict[query['query_id']]), reverse=True)]
-            rankings.append(ranking)
+        # rerank the documents
+        rankings = {}
+        for query_id in scores.keys():
+            sorted_keys = sorted(scores[query_id], key=lambda k: scores[query_id][k], reverse=True)
+            rankings[query_id] = sorted_keys
 
-        return rankings
+        return scores, rankings
 
 
 
@@ -110,9 +117,9 @@ def main(args):
 
     # load previous ranking
     print('Loading previous ranking ...')
-    # with open(f'{args.data}/{args.split}_ranking_bm25.jsonl', 'r') as f:
-    with open(f'./data/wikiweb2m/ranking_bm25.jsonl', 'r') as f:
+    with open(args.rankings, 'r') as f:
         ranking = [json.loads(line) for line in f]
+
 
     ranking_dict = {}
     for rank in ranking:
@@ -123,12 +130,24 @@ def main(args):
         queries = queries[:10]
         print('*'*12)
         print("document: ", documents[ranking[0]['bm25'][0]].keys())
+    
+    if args.querries is not None:
+        print(f"Loading querries from {args.querries} ...")
+        with open(args.querries, 'r') as f:
+            querry_keys = json.load(f)
+        querries = {k: v for k, v in querries.items() if k in querry_keys}
 
-    # Instantiate the TextRanking class
-    text_ranker = TextRanking(ranking)
+    # Instantiate the TextRanker class
+    text_ranker = TextRanker(ranking)
 
     # Get the new rankings
-    rankings = text_ranker.get_rankings(queries, documents, ranking_dict)
+    scores, rankings = text_ranker.get_rankings(queries, documents, ranking_dict)
+
+    # save scores
+    scores_file = f'./data/wikiweb2m/{args.split}_text_scores_{args.N}.json'
+    with open(scores_file, 'w') as f:
+        json.dump(scores, f)
+    print(f'Saved scores to {scores_file} ...')
 
     # Print the rankings
     if args.debug:
@@ -136,7 +155,10 @@ def main(args):
             print(f"Query_id: {query['query_id']}, Query: {query['query']}")
             print(f"Top documents: " , ranking)
     
-
+    # evaluate rankings
+    print('Evaluating rankings ...')
+    accuracy = evaluate_rankings(rankings)
+    
 
 
 
@@ -144,9 +166,11 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description='BM25 Ranker')
     parser.add_argument('--data', type=str, default="/share/edc/home/dnathani/CS293S/data/wikiweb2m/", help='Path to the data directory.')
+    parser.add_argument('--rankings', type=str, default="./data/wikiweb2m/ranking_bm25_full.jsonl", help='Path to the rankings file.')
     parser.add_argument('--split', type=str, default='test', help='Split of dataset to use.')
     parser.add_argument('--N', type=int, default=30, help='Number of top documents to store/return for each query.')
     parser.add_argument('--debug', action='store_true', help='Whether to run in debug mode.')
+    parser.add_argument('--querries', type=str, default=None, help='Path to the querries.')
     args = parser.parse_args()
 
     main(args)

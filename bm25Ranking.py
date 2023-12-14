@@ -6,6 +6,10 @@ It also provides a function to get BM25 rankings for a given set of queries and 
 
 The BM25 ranking function stores a list of top N document Ids for each query in a dictionary for easy task access.
 It also checks that the ground truth document is always in the top N results.
+
+to generate a few examples for debugging:
+python bm25Ranking.py --data ./data/wikiweb2m --split test --save_ranking --output ./data/wikiweb2m/ranking_bm25_full.jsonl
+
 """
 
 import os
@@ -135,8 +139,8 @@ def main():
         queries = [json.loads(line) for line in f]
 
     if args.debug:
-        queries = queries[:10]
-        documents = documents[:100]
+        queries = queries[:10000]
+        documents = documents[:10000]
         # print('*'*12)
         # print("document: ", documents[0].keys())
 

@@ -1,0 +1,5 @@
+python textRanking.py --querries "./data/wikiweb2m/image_scores.json"
+python evaluate.py --querries "./data/wikiweb2m/image_scores.json" --data "./data/wikiweb2m/ranking_bm25_full.jsonl"
+python evaluate.py --querries "./data/wikiweb2m/image_scores.json" --data "./text_scores.json"
+python multimodalRanking.py --text "./text_scores.json" --image "./data/wikiweb2m/image_scores.json"
+python evaluate.py --data "./text_scores_image_True_text_True_scores.json"
