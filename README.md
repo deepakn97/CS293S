@@ -21,6 +21,8 @@ OR
 2. Using image captions in place of image embeddings in above pipeline.
 3. 
 
+![Alt text](./results.png)
+
 # Project Documentation
 
 This project involves ranking and evaluating documents based on text and image scores. The project consists of several Python scripts and a shell script that runs these scripts in sequence.
